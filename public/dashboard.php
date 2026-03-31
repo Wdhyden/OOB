@@ -72,17 +72,19 @@ try {
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-/* Animation Dégradé de Bleus */
-        @keyframes blue-pulse {
-         0% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); } /* Bleu clair */
-          50% { color: #0044ff; text-shadow: 0 0 8px rgba(0, 68, 255, 0.6); }  /* Bleu foncé */
-         100% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); }
-}
 
-.vip-glow { 
-    animation: blue-pulse 3s ease-in-out infinite; 
-    font-weight: bold;
-}
+        /* Animation Dégradé de Bleus */
+        @keyframes blue-pulse {
+            0% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); } 
+            50% { color: #0044ff; text-shadow: 0 0 8px rgba(0, 68, 255, 0.6); }  
+            100% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); }
+        }
+
+        .vip-glow { 
+            animation: blue-pulse 3s ease-in-out infinite; 
+            font-weight: bold;
+        }
+
         /* --- Header --- */
         header {
             display: flex;
@@ -111,7 +113,6 @@ try {
             padding: 20px;
             border-radius: 15px;
             text-align: center;
-            position: relative;
         }
 
         .stat-card span { display: block; font-size: 0.6rem; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
@@ -179,6 +180,20 @@ try {
 
         .btn-logout:hover { background: #ff4444; color: #fff; box-shadow: 0 0 15px rgba(255, 68, 68, 0.4); }
 
+        /* --- Style des Notifications --- */
+        #notif-area {
+            animation: fadeIn 0.4s ease-out;
+        }
+        .notif-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 0.85rem;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .notif-item:last-child { border-bottom: none; }
+
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
     </style>
@@ -200,11 +215,20 @@ try {
         <div class="stat-card"><span>PHP Version</span><strong><?= PHP_VERSION ?></strong></div>
     </div>
 
+    <div id="notif-area" style="width: 100%; margin-bottom: 30px; display: none;">
+        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--neon); border-radius: 18px; padding: 20px; backdrop-filter: blur(10px);">
+            <div style="font-size: 0.65rem; color: var(--neon); letter-spacing: 2px; margin-bottom: 10px; font-weight: bold; text-transform: uppercase;">
+                Alertes_Système
+            </div>
+            <div id="notif-list"></div>
+        </div>
+    </div>
+
     <div class="menu-grid">
         <?php if($user_role === 'admin'): ?>
         <a href="admin.php" class="nav-card admin-card">
             <span class="icon">⚙️</span>
-            <h2 style="color: #ff4444;">OVERLORD_PANEL</h2>
+            <h2 style="color: #ff4444;">Admin PANEL</h2>
             <p>Contrôle total : gestion des utilisateurs, modération et monitoring système.</p>
         </a>
         <?php endif; ?>
@@ -251,6 +275,34 @@ try {
         </div>
     </div>
 </div>
+
+<script>
+function syncNotifications() {
+    // Note: On utilise le chemin relatif correct vers ton fichier AJAX
+    fetch('../app/ajax/notifications_load.php')
+    .then(r => r.json())
+    .then(data => {
+        const area = document.getElementById('notif-area');
+        const list = document.getElementById('notif-list');
+        if (data && data.length > 0) {
+            area.style.display = 'block';
+            list.innerHTML = data.map(n => `
+                <div class="notif-item">
+                    <span>• ${n.message}</span>
+                    <a href="${n.link}" style="color:var(--neon); text-decoration:none; font-weight:bold;">[VOIR]</a>
+                </div>
+            `).join('');
+        } else {
+            area.style.display = 'none';
+        }
+    })
+    .catch(err => console.log("Notification sync standby..."));
+}
+
+// Vérification toutes les 20 secondes
+setInterval(syncNotifications, 20000);
+syncNotifications();
+</script>
 
 </body>
 </html>

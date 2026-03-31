@@ -1,171 +1,189 @@
 <?php
-// public/admin.php
 require_once __DIR__ . '/../app/config/database.php';
 require_once __DIR__ . '/../app/lib/auth.php';
+require_once __DIR__ . '/../app/lib/ranks.php';
 
-// S√©curit√© : V√©rifie si l'utilisateur est admin
+// SÈcuritÈ : VÈrification Admin
+check_auth();
 check_admin();
 
-$user_id = $_SESSION['user_id'];
 $success_msg = "";
+$error_msg = "";
 
-// --- LOGIQUE DES ACTIONS ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'], $_POST['target_id'])) {
-    $target_id = (int)$_POST['target_id'];
+// --- TRAITEMENT DES ACTIONS ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    
+    // 1. CR…ATION D'UN RANG
+    if ($_POST['action'] === 'create_rank') {
+        $name = htmlspecialchars($_POST['rank_name']);
+        $color = $_POST['rank_color'];
+        $color_two = !empty($_POST['rank_color_two']) ? $_POST['rank_color_two'] : null;
+        $is_animated = isset($_POST['is_animated']) ? 1 : 0;
 
-    try {
-        switch ($_POST['action']) {
-            case 'approve':
-                $pdo->prepare("UPDATE users SET is_pending = 0 WHERE id = ?")->execute([$target_id]);
-                $success_msg = "Acc√®s autoris√© pour le sujet #$target_id.";
-                break;
-
-            case 'make_vip':
-                $pdo->prepare("UPDATE users SET role = 'vip' WHERE id = ?")->execute([$target_id]);
-                $success_msg = "Sujet #$target_id promu au rang VIP.";
-                break;
-
-            case 'make_user':
-                $pdo->prepare("UPDATE users SET role = 'user' WHERE id = ?")->execute([$target_id]);
-                $success_msg = "Sujet #$target_id r√©trograd√© au rang USER.";
-                break;
-
-            case 'terminate':
-                // Emp√™che de se supprimer soi-m√™me
-                if ($target_id !== $user_id) {
-                    $pdo->prepare("DELETE FROM users WHERE id = ? AND role != 'admin'")->execute([$target_id]);
-                    $success_msg = "Sujet #$target_id effac√© des archives.";
-                }
-                break;
+        try {
+            $stmt = $pdo->prepare("INSERT INTO ranks (name, color, color_two, icon, is_animated) VALUES (?, ?, ?, '', ?)");
+            $stmt->execute([$name, $color, $color_two, $is_animated]);
+            $success_msg = "Le rang '$name' a ÈtÈ forgÈ avec succËs.";
+        } catch (Exception $e) {
+            $error_msg = "Erreur : Ce nom de rang existe dÈj‡ ou la base est mal configurÈe.";
         }
-    } catch (Exception $e) {
-        $error_msg = "Erreur syst√®me : " . $e->getMessage();
+    }
+
+    // 2. SUPPRESSION D'UN RANG
+    if ($_POST['action'] === 'delete_rank') {
+        $rank_id = (int)$_POST['rank_id'];
+        
+        $stmt = $pdo->prepare("SELECT name FROM ranks WHERE id = ?");
+        $stmt->execute([$rank_id]);
+        $rName = $stmt->fetchColumn();
+
+        if ($rName && $rName !== 'User') {
+            $pdo->prepare("UPDATE user_profiles SET rank = 'User' WHERE rank = ?")->execute([$rName]);
+            $pdo->prepare("DELETE FROM ranks WHERE id = ?")->execute([$rank_id]);
+            $success_msg = "Rang supprimÈ. Les membres rattachÈs sont repassÈs en 'User'.";
+        }
+    }
+
+    // 3. ATTRIBUTION DU RANG ¿ UN UTILISATEUR
+    if ($_POST['action'] === 'update_user_rank') {
+        $user_id = (int)$_POST['target_id'];
+        $new_rank = $_POST['new_rank'];
+        $pdo->prepare("UPDATE user_profiles SET rank = ? WHERE user_id = ?")->execute([$new_rank, $user_id]);
+        $success_msg = "Grade mis ‡ jour pour l'utilisateur.";
     }
 }
 
-// --- R√âCUP√âRATION DE LA LISTE DES MEMBRES ---
-$users = $pdo->query("
-    SELECT u.id, u.username, u.role, u.is_pending, u.created_at, p.nickname_color 
-    FROM users u 
-    JOIN user_profiles p ON u.id = p.user_id 
-    ORDER BY u.is_pending DESC, u.created_at DESC
-")->fetchAll();
+// RÈcupÈration des donnÈes
+$users = $pdo->query("SELECT u.id, u.username, p.rank FROM users u JOIN user_profiles p ON u.id = p.user_id ORDER BY u.username ASC")->fetchAll();
+$allRanks = getAllRanks($pdo);
 ?>
+
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>OOB // OVERLORD PANEL</title>
+    <title>OOB // OVERLORD_PANEL</title>
     <style>
-        :root {
-            --bg: #050506;
-            --neon: #ff4444; /* Rouge pour l'admin */
-            --vip: #00d4ff;  /* Bleu pour le VIP */
-            --border: rgba(255, 255, 255, 0.08);
-        }
-
+        :root { --neon: #ff4444; --bg: #050506; --panel: rgba(255,255,255,0.02); --border: #222; }
         body { background: var(--bg); color: #eee; font-family: 'Segoe UI', sans-serif; padding: 40px; margin: 0; }
+        h1 { letter-spacing: 5px; text-transform: uppercase; border-left: 4px solid var(--neon); padding-left: 15px; font-size: 1.5rem; margin-bottom: 40px; }
+        h2 { font-size: 0.8rem; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px; }
+        
         .container { max-width: 1100px; margin: 0 auto; }
+        .section { background: var(--panel); border: 1px solid var(--border); padding: 25px; border-radius: 15px; margin-bottom: 30px; }
+        
+        input, select, button { background: #000; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 5px; outline: none; }
+        button { background: var(--neon); border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { opacity: 0.8; box-shadow: 0 0 15px rgba(255,68,68,0.3); }
+        button.del { background: transparent; border: 1px solid var(--neon); color: var(--neon); padding: 5px 10px; font-size: 0.7rem; }
 
-        header { border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; }
-        h1 { letter-spacing: 5px; text-transform: uppercase; font-size: 1.2rem; color: var(--neon); margin: 0; }
-        .btn-back { color: #555; text-decoration: none; font-size: 0.8rem; font-weight: bold; }
-        .btn-back:hover { color: #fff; }
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 0.7rem; color: #444; text-transform: uppercase; padding: 10px; }
+        td { padding: 15px 10px; border-bottom: 1px solid #111; vertical-align: middle; }
 
-        .alert { background: rgba(0, 255, 100, 0.1); border: 1px solid #00ff64; color: #00ff64; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; }
-
-        /* Table Design */
-        table { width: 100%; border-collapse: collapse; background: rgba(255,255,255,0.02); border-radius: 12px; overflow: hidden; }
-        th { background: rgba(255,255,255,0.03); text-align: left; padding: 15px; font-size: 0.7rem; color: #444; text-transform: uppercase; }
-        td { padding: 15px; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
-
-        /* Badges */
-        .badge { font-size: 0.65rem; font-weight: 900; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; }
-        .bg-pending { background: rgba(255, 170, 0, 0.1); color: #ffaa00; border: 1px solid #ffaa00; }
-        .bg-vip { background: rgba(0, 212, 255, 0.1); color: var(--vip); border: 1px solid var(--vip); }
-        .bg-admin { background: rgba(255, 0, 0, 0.1); color: var(--neon); border: 1px solid var(--neon); }
-
-        /* Buttons */
-        .btn { padding: 6px 12px; border-radius: 5px; border: none; font-size: 0.7rem; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .btn-approve { background: #00ff64; color: #000; }
-        .btn-promote { background: var(--vip); color: #000; }
-        .btn-demote { background: #555; color: #fff; }
-        .btn-delete { background: transparent; border: 1px solid #ff4444; color: #ff4444; }
-        .btn-delete:hover { background: #ff4444; color: #fff; }
-
-        .actions-flex { display: flex; gap: 8px; }
+        .msg { padding: 15px; border-radius: 10px; margin-bottom: 20px; font-size: 0.9rem; font-weight: bold; }
+        .success { background: rgba(0,255,100,0.1); color: #00ff64; border: 1px solid #00ff64; }
+        .error { background: rgba(255,0,0,0.1); color: #ff4444; border: 1px solid #ff4444; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <header>
-        <h1>OVERLORD_CONTROL_PANEL</h1>
-        <a href="dashboard.php" class="btn-back">‚Üê RETOUR_HUB</a>
-    </header>
+    <h1>OVERLORD_PANEL</h1>
 
-    <?php if($success_msg): ?> <div class="alert"><?= $success_msg ?></div> <?php endif; ?>
+    <?php if($success_msg): ?> <div class="msg success"><?= $success_msg ?></div> <?php endif; ?>
+    <?php if($error_msg): ?> <div class="msg error"><?= $error_msg ?></div> <?php endif; ?>
 
-    <table>
-        <thead>
-            <tr>
-                <th>Sujet</th>
-                <th>Statut / R√¥le</th>
-                <th>Rejoint le</th>
-                <th>Actions de Contr√¥le</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach($users as $u): ?>
-            <tr>
-                <td style="font-weight:bold; color:<?= $u['nickname_color'] ?>">
-                    <?= htmlspecialchars($u['username']) ?>
-                    <?php if($u['id'] == $user_id): ?> <small style="color:#555">(Moi)</small> <?php endif; ?>
-                </td>
+    <div class="section">
+        <h2>+ FORGER_UN_NOUVEAU_RANG</h2>
+        <form method="POST" style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 15px; align-items: end;">
+            <input type="hidden" name="action" value="create_rank">
+            
+            <div>
+                <label style="display:block; font-size:0.6rem; margin-bottom:5px;">NOM DU RANG</label>
+                <input type="text" name="rank_name" placeholder="ex: Figma Lover" required style="width:100%;">
+            </div>
+            <div>
+                <label style="display:block; font-size:0.6rem; margin-bottom:5px;">COULEUR 1 (PRINCIPALE)</label>
+                <input type="color" name="rank_color" value="#ff4444" style="width:100%; height:40px; cursor:pointer;">
+            </div>
+            <div>
+                <label style="display:block; font-size:0.6rem; margin-bottom:5px;">COULEUR 2 (BICO / OPTION)</label>
+                <input type="color" name="rank_color_two" value="#00f2ff" style="width:100%; height:40px; cursor:pointer;">
+            </div>
+            <div style="padding-bottom:12px; text-align:center;">
+                <label style="font-size:0.7rem; cursor:pointer;"><input type="checkbox" name="is_animated"> ANIMATION_RGB</label>
+            </div>
+            <button type="submit" style="height:42px;">CR…ER</button>
+        </form>
+    </div>
 
-                <td>
-                    <?php if($u['is_pending']): ?>
-                        <span class="badge bg-pending">En Attente</span>
-                    <?php else: ?>
-                        <span class="badge bg-<?= $u['role'] ?>"><?= $u['role'] ?></span>
-                    <?php endif; ?>
-                </td>
-
-                <td style="color:#444; font-size:0.8rem;"><?= date('d/m/Y', strtotime($u['created_at'])) ?></td>
-
-                <td class="actions-flex">
-                    <?php if($u['is_pending']): ?>
-                        <form method="POST">
-                            <input type="hidden" name="target_id" value="<?= $u['id'] ?>">
-                            <button type="submit" name="action" value="approve" class="btn btn-approve">Autoriser</button>
+    <div class="section">
+        <h2>RANGS_CONFIGUR…S</h2>
+        <table>
+            <thead>
+                <tr><th>Nom du Grade</th><th>PropriÈtÈs</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+                <?php foreach($allRanks as $rk): ?>
+                <tr>
+                    <td>
+                        <span style="color: <?= $rk['color'] ?>; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">
+                            <?= htmlspecialchars($rk['name']) ?>
+                        </span>
+                    </td>
+                    <td style="font-size: 0.8rem; color: #666;">
+                        <?= $rk['is_animated'] ? '? AnimÈ' : '? Statique' ?>
+                        <?= !empty($rk['color_two']) ? ' | ?? Bicolore' : ' | ?? Monochrome' ?>
+                    </td>
+                    <td>
+                        <?php if($rk['name'] !== 'User'): ?>
+                        <form method="POST" onsubmit="return confirm('Supprimer ce grade ?');">
+                            <input type="hidden" name="action" value="delete_rank">
+                            <input type="hidden" name="rank_id" value="<?= $rk['id'] ?>">
+                            <button type="submit" class="del">SUPPRIMER</button>
                         </form>
-                    <?php endif; ?>
-
-                    <?php if($u['id'] != $user_id): ?>
-                        <?php if($u['role'] === 'user'): ?>
-                            <form method="POST">
-                                <input type="hidden" name="target_id" value="<?= $u['id'] ?>">
-                                <button type="submit" name="action" value="make_vip" class="btn btn-promote">Promouvoir VIP</button>
-                            </form>
-                        <?php elseif($u['role'] === 'vip'): ?>
-                            <form method="POST">
-                                <input type="hidden" name="target_id" value="<?= $u['id'] ?>">
-                                <button type="submit" name="action" value="make_user" class="btn btn-demote">R√©trograder</button>
-                            </form>
                         <?php endif; ?>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
 
-                        <?php if($u['role'] !== 'admin'): ?>
-                            <form method="POST" onsubmit="return confirm('Confirmer l\'effacement d√©finitif du sujet ?');">
-                                <input type="hidden" name="target_id" value="<?= $u['id'] ?>">
-                                <button type="submit" name="action" value="terminate" class="btn btn-delete">Supprimer</button>
-                            </form>
-                        <?php endif; ?>
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
+    <div class="section">
+        <h2>ATTRIBUTION_AUX_MEMBRES</h2>
+        <table>
+            <thead>
+                <tr><th>Utilisateur</th><th>Rang Actuel</th><th>Modifier Grade</th></tr>
+            </thead>
+            <tbody>
+                <?php foreach($users as $u): ?>
+                <tr>
+                    <td style="font-weight:bold; letter-spacing:0.5px;"><?= htmlspecialchars($u['username']) ?></td>
+                    <td>
+                        <span style="font-size:0.75rem; color:#888; background:rgba(255,255,255,0.05); padding:4px 8px; border-radius:4px;">
+                            <?= htmlspecialchars($u['rank']) ?>
+                        </span>
+                    </td>
+                    <td>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="update_user_rank">
+                            <input type="hidden" name="target_id" value="<?= $u['id'] ?>">
+                            <select name="new_rank" onchange="this.form.submit()" style="width:100%; cursor:pointer;">
+                                <?php foreach($allRanks as $rk): ?>
+                                    <option value="<?= $rk['name'] ?>" <?= ($u['rank'] == $rk['name']) ? 'selected' : '' ?>>
+                                        <?= $rk['name'] ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
 </div>
 
 </body>

@@ -33,7 +33,7 @@ function check_validation($pdo) {
         <div style='background:#050506; color:#ff4444; height:100vh; display:flex; align-items:center; justify-content:center; font-family:sans-serif; text-align:center;'>
             <div style='border:1px solid #ff4444; padding:40px; border-radius:20px; background:rgba(255,0,0,0.05);'>
                 <h1 style='letter-spacing:5px; margin-bottom:10px;'>ACCÈS RESTREINT</h1>
-                <p style='color:#888; margin-bottom:30px;'>Votre identité est en cours de vérification par l'Overlord.<br>L'accès aux transmissions est suspendu.</p>
+                <p style='color:#888; margin-bottom:30px;'>Votre compte est en cours de vérification par l'administration.<br>L'accès au site est suspendu.</p>
                 <a href='logout.php' style='color:#fff; text-decoration:none; border:1px solid #444; padding:10px 25px; border-radius:10px; font-weight:bold;'>QUITTER LE RÉSEAU</a>
             </div>
         </div>");
