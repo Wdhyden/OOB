@@ -2,8 +2,8 @@
 // app/config/database.php
 $host = 'localhost';
 $dbname = 'community_app';
-$db_user = 'root';  // ou votre utilisateur MySQL
-$db_pass = '';      // mot de passe root MySQL
+$db_user = 'oob_user';
+$db_pass = 'Haribo62230';
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $db_user, $db_pass);

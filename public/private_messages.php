@@ -1,180 +1,226 @@
 <?php
-// public/private_messages.php - FONCTIONNEL SANS DB SPÉCIFIQUE
-session_start();
-if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php'); exit;
-}
+// public/private_messages.php
+require_once __DIR__ . '/../app/config/database.php';
+require_once __DIR__ . '/../app/lib/auth.php';
+
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (!isset($_SESSION['user_id'])) { header('Location: login.php'); exit; }
 
 $user_id = $_SESSION['user_id'];
-$username = $_SESSION['username'] ?? 'User';
+$contact_id = isset($_GET['with']) ? (int)$_GET['with'] : null;
 
-// FICHIER JSON pour stocker messages (pas besoin DB)
-$messages_file = __DIR__ . '/../storage/mp_messages.json';
-if (!is_dir(dirname($messages_file))) {
-    mkdir(dirname($messages_file), 0777, true);
-}
+// 1. Récupérer la liste des conversations actives
+$stmt = $pdo->prepare("
+    SELECT DISTINCT u.id, u.username, p.avatar_path, p.nickname_color
+    FROM users u
+    JOIN user_profiles p ON u.id = p.user_id
+    JOIN private_messages m ON (m.sender_id = u.id OR m.receiver_id = u.id)
+    WHERE (m.sender_id = :uid OR m.receiver_id = :uid) AND u.id != :uid
+");
+$stmt->execute(['uid' => $user_id]);
+$contacts = $stmt->fetchAll();
 
-$all_messages = [];
-if (file_exists($messages_file)) {
-    $all_messages = json_decode(file_get_contents($messages_file), true) ?: [];
-}
+// 2. Récupérer TOUS les utilisateurs pour la modale
+$stmt = $pdo->prepare("
+    SELECT u.id, u.username, p.avatar_path, p.nickname_color 
+    FROM users u 
+    JOIN user_profiles p ON u.id = p.user_id 
+    WHERE u.id != ? 
+    ORDER BY u.username ASC
+");
+$stmt->execute([$user_id]);
+$all_users = $stmt->fetchAll();
 
-// Envoi message
-if ($_POST['action'] === 'send') {
-    $recipient = trim($_POST['recipient']);
-    $message = trim($_POST['message']);
-    
-    if ($recipient && $message && strlen($message) <= 500) {
-        $all_messages[] = [
-            'id' => uniqid(),
-            'sender_id' => $user_id,
-            'sender' => $username,
-            'recipient' => $recipient,
-            'message' => $message,
-            'time' => date('Y-m-d H:i:s'),
-            'read' => false
-        ];
-        file_put_contents($messages_file, json_encode($all_messages));
+// 3. Charger les messages de la conversation sélectionnée
+$messages = [];
+$contact_info = null;
+if ($contact_id) {
+    $stmt = $pdo->prepare("SELECT u.username, p.nickname_color, p.avatar_path FROM users u JOIN user_profiles p ON u.id = p.user_id WHERE u.id = ?");
+    $stmt->execute([$contact_id]);
+    $contact_info = $stmt->fetch();
+
+    if ($contact_info) {
+        $stmt = $pdo->prepare("SELECT * FROM private_messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY sent_at ASC");
+        $stmt->execute([$user_id, $contact_id, $contact_id, $user_id]);
+        $messages = $stmt->fetchAll();
     }
-    header('Location: private_messages.php?with=' . urlencode($recipient));
-    exit;
 }
-
-// Messages pour utilisateur connecté
-$recipient_filter = $_GET['with'] ?? '';
-$my_messages = array_filter($all_messages, function($msg) use ($user_id, $username, $recipient_filter) {
-    return ($msg['sender_id'] == $user_id || $msg['recipient'] == $username) &&
-           (!$recipient_filter || $msg['recipient'] == $recipient_filter || $msg['sender'] == $recipient_filter);
-});
-
-// Utilisateurs avec conversations
-$users_in_convo = array_unique(array_merge(
-    array_column($my_messages, 'recipient'),
-    array_column($my_messages, 'sender')
-));
-$users_in_convo = array_filter($users_in_convo, fn($u) => $u !== $username);
 ?>
-
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
-    <title>Messages Privés</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messagerie Sécurisée - OOB</title>
     <style>
-        *{margin:0;padding:0;box-sizing:border-box;}
-        body{background:#0a0a0a;color:#f5f5f5;font-family:Arial,sans-serif;height:100vh;}
-        .header{display:flex;justify-content:space-between;align-items:center;padding:20px;background:#1f2020;}
-        .container{display:flex;height:calc(100vh - 80px);max-width:1400px;margin:0 auto;gap:1px;}
-        .sidebar{width:320px;background:#1f2020;overflow:auto;}
-        .main{flex:1;background:#1f2020;display:flex;flex-direction:column;}
-        .conv-section{padding:20px;}
-        .new-mp{background:#2a2a2a;padding:20px;border-radius:12px;margin-bottom:20px;}
-        .conv-list h3{margin-bottom:15px;color:#ff6fd8;}
-        .conv-item{padding:15px;cursor:pointer;border-radius:8px;margin-bottom:8px;transition:all 0.3s;border-left:3px solid #333;}
-        .conv-item:hover,.conv-item.active{border-left-color:#ff6fd8;background:#2a2a2a;}
-        .conv-name{font-weight:bold;font-size:16px;}
-        .conv-preview{font-size:14px;opacity:0.8;margin-top:4px;}
-        .unread{background:#00ff88;color:#000;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:bold;float:right;}
-        .messages{flex:1;overflow-y:auto;padding:20px;}
-        .message{margin-bottom:15px;padding:12px 16px;border-radius:20px;max-width:75%;word-wrap:break-word;}
-        .message.sent{background:linear-gradient(135deg,#ff6fd8,#ff85e4);color:#000;margin-left:auto;}
-        .message.received{background:#333;}
-        .message-header{font-weight:bold;margin-bottom:4px;}
-        .message-time{font-size:12px;opacity:0.7;margin-top:4px;}
-        .input-area{padding:20px;border-top:1px solid #333;display:flex;gap:10px;}
-        .msg-input{flex:1;padding:15px;border:1px solid #444;background:#2a2a2a;color:#f5f5f5;border-radius:25px;}
-        .send-btn{padding:15px 25px;background:#ff6fd8;color:#000;border:none;border-radius:25px;cursor:pointer;font-weight:bold;}
-        .empty{padding:80px;text-align:center;color:#888;}
-        h1{font-size:28px;color:#ff6fd8;}
+        :root {
+            --neon: <?= htmlspecialchars($contact_info['nickname_color'] ?? '#ff6fd8') ?>;
+            --bg: #0a0a0b;
+            --glass: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            background: var(--bg);
+            color: #eee;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* --- Barre de Navigation --- */
+        .top-nav {
+            padding: 15px 30px;
+            background: rgba(255, 255, 255, 0.02);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--glass-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .btn-nav {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 700;
+            transition: 0.3s;
+        }
+
+        .btn-nav:hover { background: var(--neon); color: #000; box-shadow: 0 0 15px var(--neon); }
+
+        /* --- Layout --- */
+        .messenger-wrapper { display: flex; flex: 1; overflow: hidden; }
+
+        /* --- Contacts (Gauche) --- */
+        .side-panel { width: 320px; background: rgba(0, 0, 0, 0.2); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; }
+        .side-header { padding: 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); }
+        .btn-plus { background: var(--neon); color: #000; border: none; width: 28px; height: 28px; border-radius: 8px; font-weight: 900; cursor: pointer; transition: 0.3s; }
+        .btn-plus:hover { transform: scale(1.1); box-shadow: 0 0 10px var(--neon); }
+
+        .contacts-list { flex: 1; overflow-y: auto; }
+        .contact-item { display: flex; align-items: center; padding: 15px 20px; text-decoration: none; color: #888; transition: 0.2s; border-left: 3px solid transparent; }
+        .contact-item:hover { background: rgba(255,255,255,0.03); }
+        .contact-item.active { background: rgba(255,255,255,0.05); border-left-color: var(--neon); color: #fff; }
+        .avatar-small { width: 40px; height: 40px; border-radius: 10px; margin-right: 15px; object-fit: cover; border: 1px solid var(--glass-border); }
+
+        /* --- Chat (Droite) --- */
+        .main-chat { flex: 1; display: flex; flex-direction: column; background: radial-gradient(circle at top right, rgba(255,111,216,0.02), transparent); }
+        .chat-header { padding: 18px 30px; background: rgba(255,255,255,0.01); border-bottom: 1px solid var(--glass-border); display: flex; align-items: center; gap: 15px; }
+        .messages-container { flex: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+
+        .bubble { max-width: 65%; padding: 12px 18px; border-radius: 18px; font-size: 0.92rem; line-height: 1.5; }
+        .bubble.sent { align-self: flex-end; background: var(--neon); color: #000; font-weight: 600; border-bottom-right-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .bubble.received { align-self: flex-start; background: var(--glass); border: 1px solid var(--glass-border); color: #fff; border-bottom-left-radius: 4px; }
+        .time { font-size: 0.6rem; opacity: 0.5; display: block; margin-top: 5px; text-align: right; }
+
+        /* --- Input Area --- */
+        .input-bar { padding: 20px 30px; background: rgba(0,0,0,0.2); display: flex; gap: 12px; border-top: 1px solid var(--glass-border); }
+        .input-bar input { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); padding: 12px 18px; border-radius: 12px; color: #fff; outline: none; transition: 0.3s; }
+        .input-bar input:focus { border-color: var(--neon); background: rgba(0,0,0,0.4); }
+        .btn-send { background: var(--neon); color: #000; border: none; padding: 0 20px; border-radius: 12px; font-weight: 800; cursor: pointer; transition: 0.2s; }
+        .btn-send:hover { transform: translateY(-2px); box-shadow: 0 0 15px var(--neon); }
+
+        /* --- Modale --- */
+        .modal { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.9); backdrop-filter: blur(10px); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-card { background: #111; border: 1px solid var(--glass-border); width: 380px; border-radius: 24px; padding: 25px; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+        .user-row { display: flex; align-items: center; padding: 10px; text-decoration: none; color: #fff; border-radius: 10px; margin-bottom: 5px; transition: 0.2s; }
+        .user-row:hover { background: var(--glass); }
+
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 10px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>📨 Messages Privés</h1>
-        <a href="dashboard.php" style="color:#ff6fd8;padding:12px 24px;background:#2a2a2a;border-radius:12px;text-decoration:none;font-weight:bold;">← Dashboard</a>
-    </div>
 
-    <div class="container">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div class="conv-section">
-                <div class="new-mp">
-                    <h3 style="color:#ff6fd8;margin-bottom:15px;">✨ Nouveau message</h3>
-                    <form method="POST" style="display:flex;flex-direction:column;gap:10px;">
-                        <input type="hidden" name="action" value="send">
-                        <input type="text" name="recipient" placeholder="Pseudo destinataire..." 
-                               value="<?= htmlspecialchars($recipient_filter) ?>" list="users-list" 
-                               style="padding:12px;background:#333;color:#f5f5f5;border:none;border-radius:8px;" required>
-                        <datalist id="users-list">
-                            <?php foreach(array_unique(array_merge(['alice','bob','charlie','diana'], $users_in_convo)) as $user): ?>
-                                <option value="<?= htmlspecialchars($user) ?>">
-                            <?php endforeach; ?>
-                        </datalist>
-                        <input type="text" name="message" placeholder="Votre message..." maxlength="500" required 
-                               style="padding:12px;background:#333;color:#f5f5f5;border:none;border-radius:8px;">
-                        <button type="submit" class="send-btn">📤 Envoyer</button>
-                    </form>
-                </div>
-            </div>
-            
-            <div class="conv-section">
-                <h3>Conversations (<?= count($users_in_convo) ?>)</h3>
-                <div class="conv-list">
-                    <?php foreach($users_in_convo as $user): ?>
-                        <?php 
-                        $user_msgs = array_filter($my_messages, fn($m) => $m['recipient'] == $user || $m['sender'] == $user);
-                        $unread = count(array_filter($user_msgs, fn($m) => $m['recipient'] == $username && !$m['read']));
-                        $last_msg = end($user_msgs)['message'] ?? '';
-                        ?>
-                        <a href="?with=<?= urlencode($user) ?>" class="conv-item <?= $recipient_filter == $user ? 'active' : '' ?>">
-                            <div class="conv-name"><?= htmlspecialchars($user) ?></div>
-                            <div class="conv-preview"><?= htmlspecialchars(substr($last_msg, 0, 50)) ?>...</div>
-                            <?php if($unread): ?>
-                                <span class="unread"><?= $unread ?></span>
-                            <?php endif; ?>
-                        </a>
-                    <?php endforeach; ?>
-                    <?php if(empty($users_in_convo)): ?>
-                        <div class="conv-item" style="justify-content:center;color:#888;">Aucune conversation</div>
-                    <?php endif; ?>
-                </div>
-            </div>
+<div class="top-nav">
+    <a href="dashboard.php" class="btn-nav">🏠 DASHBOARD</a>
+    <div style="letter-spacing: 4px; font-weight: 900; font-size: 0.65rem; color: #444;">OOB // SECURE_COMMS</div>
+    <div style="width: 100px;"></div>
+</div>
+
+<div class="messenger-wrapper">
+    <div class="side-panel">
+        <div class="side-header">
+            <span style="font-weight: 800; font-size: 0.75rem; letter-spacing: 1px; color: #666;">TRANSMISSIONS</span>
+            <button class="btn-plus" onclick="toggleModal(true)">+</button>
         </div>
-
-        <!-- Chat principal -->
-        <div class="main">
-            <?php if($recipient_filter && ($recipient_msgs = array_filter($my_messages, fn($m) => 
-                ($m['recipient'] == $recipient_filter && $m['sender_id'] == $user_id) || 
-                ($m['recipient'] == $username && $m['sender'] == $recipient_filter)))): ?>
-                <div class="messages">
-                    <?php foreach($recipient_msgs as $msg): ?>
-                        <div class="message <?= $msg['sender_id'] == $user_id ? 'sent' : 'received' ?>">
-                            <div class="message-header"><?= htmlspecialchars($msg['sender']) ?></div>
-                            <div><?= nl2br(htmlspecialchars($msg['message'])) ?></div>
-                            <div class="message-time"><?= date('H:i', strtotime($msg['time'])) ?></div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-                <form method="POST" class="input-area">
-                    <input type="hidden" name="action" value="send">
-                    <input type="hidden" name="recipient" value="<?= htmlspecialchars($recipient_filter) ?>">
-                    <input type="text" name="message" placeholder="Tapez votre message..." maxlength="500" required class="msg-input">
-                    <button type="submit" class="send-btn">Envoyer</button>
-                </form>
-            <?php else: ?>
-                <div class="messages empty">
-                    <h3>💬 Messages Privés</h3>
-                    <p>Choisissez une conversation ou envoyez un message à quelqu'un</p>
-                </div>
-            <?php endif; ?>
+        <div class="contacts-list">
+            <?php foreach ($contacts as $c): ?>
+                <a href="?with=<?= $c['id'] ?>" class="contact-item <?= ($contact_id == $c['id']) ? 'active' : '' ?>">
+                    <img src="<?= htmlspecialchars($c['avatar_path'] ?: 'assets/img/default-avatar.png') ?>" class="avatar-small">
+                    <span style="color: <?= htmlspecialchars($c['nickname_color']) ?>; font-weight: 600;">
+                        <?= htmlspecialchars($c['username']) ?>
+                    </span>
+                </a>
+            <?php endforeach; ?>
         </div>
     </div>
 
-    <script>
-        // Auto-scroll
-        document.querySelector('.messages')?.scrollTo(0, 999999);
-        
-        // Input focus
-        document.querySelector('.msg-input')?.focus();
-    </script>
+    <div class="main-chat">
+        <?php if ($contact_id && $contact_info): ?>
+            <div class="chat-header">
+                <img src="<?= htmlspecialchars($contact_info['avatar_path'] ?: 'assets/img/default-avatar.png') ?>" class="avatar-small" style="width: 32px; height: 32px;">
+                <span style="color: <?= htmlspecialchars($contact_info['nickname_color']) ?>; font-weight: 800; letter-spacing: 1px;">
+                    @<?= htmlspecialchars($contact_info['username']) ?>
+                </span>
+            </div>
+
+            <div class="messages-container" id="scrollBox">
+                <?php foreach ($messages as $m): ?>
+                    <div class="bubble <?= ($m['sender_id'] == $user_id) ? 'sent' : 'received' ?>">
+                        <?= nl2br(htmlspecialchars($m['content'])) ?>
+                        <span class="time"><?= date('H:i', strtotime($m['sent_at'])) ?></span>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <form class="input-bar" method="POST" action="send_message.php">
+                <input type="hidden" name="receiver_id" value="<?= $contact_id ?>">
+                <input type="text" name="message" placeholder="Entrez une commande ou un message..." required autocomplete="off">
+                <button type="submit" class="btn-send">TRANSMETTRE</button>
+            </form>
+        <?php else: ?>
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; opacity: 0.15; text-align: center;">
+                <div>
+                    <div style="font-size: 4rem; margin-bottom: 15px;">📡</div>
+                    <p style="letter-spacing: 2px; font-weight: 700;">INITIALISEZ UNE CONNEXION<br>VIA LE TERMINAL GAUCHE</p>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="modal" id="userModal" onclick="toggleModal(false)">
+    <div class="modal-card" onclick="event.stopPropagation()">
+        <h2 style="margin-top: 0; font-size: 1rem; color: var(--neon); letter-spacing: 2px;">NOUVELLE CIBLE</h2>
+        <div style="max-height: 350px; overflow-y: auto; margin-top: 15px;">
+            <?php foreach ($all_users as $u): ?>
+                <a href="?with=<?= $u['id'] ?>" class="user-row">
+                    <img src="<?= htmlspecialchars($u['avatar_path'] ?: 'assets/img/default-avatar.png') ?>" class="avatar-small" style="width: 30px; height: 30px;">
+                    <span style="color: <?= htmlspecialchars($u['nickname_color']) ?>"><?= htmlspecialchars($u['username']) ?></span>
+                </a>
+            <?php endforeach; ?>
+        </div>
+    </div>
+</div>
+
+<script>
+    const box = document.getElementById('scrollBox');
+    if(box) box.scrollTop = box.scrollHeight;
+
+    function toggleModal(show) {
+        document.getElementById('userModal').style.display = show ? 'flex' : 'none';
+    }
+</script>
+
 </body>
 </html>

@@ -1,135 +1,104 @@
 <?php
-// public/chat.php - VERSION COMPLÈTE
-require_once __DIR__ . '/../app/lib/auth.php';
-require_login();
 require_once __DIR__ . '/../app/config/database.php';
-require_once __DIR__ . '/../app/lib/security.php';
+require_once __DIR__ . '/../app/lib/auth.php';
 
-$user_id = current_user_id();
-$role = $_SESSION['role'];
+check_auth();
+check_validation($pdo);
 
-// Charger les salons accessibles à l'utilisateur
-$stmt = $pdo->prepare("
-    SELECT cr.id, cr.name, cr.description, rm.is_admin,
-           (SELECT COUNT(*) FROM room_members rm2 WHERE rm2.room_id = cr.id) as member_count
-    FROM chat_rooms cr
-    JOIN room_members rm ON rm.room_id = cr.id
-    WHERE rm.user_id = ?
-    ORDER BY cr.name
-");
+$user_id = $_SESSION['user_id'];
+$stmt = $pdo->prepare("SELECT p.nickname_color FROM user_profiles p WHERE p.user_id = ?");
 $stmt->execute([$user_id]);
-$rooms = $stmt->fetchAll();
-
-// Charger utilisateurs en ligne pour sidebar droite
-$stmt = $pdo->query("SELECT id, username FROM users WHERE online_status = 'online' ORDER BY username LIMIT 20");
-$online_users = $stmt->fetchAll();
+$my_neon = $stmt->fetch()['nickname_color'] ?? '#00f2ff';
 ?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Chat - Community App</title>
-    <link rel="stylesheet" href="/assets/css/style.css">
-</head>
-<body class="theme-dark">
-<div class="app-shell">
-    <!-- Sidebar salons (gauche) -->
-    <aside class="sidebar-rooms">
-        <div class="sidebar-header">
-            <h3>Salons</h3>
-            <?php if (in_array($role, ['admin', 'moderator'])): ?>
-                <button id="create-room" class="btn-primary btn-small" title="Nouveau salon">➕</button>
-            <?php endif; ?>
-        </div>
+    <title>Global Chat // OOB</title>
+    <style>
+        :root { --neon: <?= $my_neon ?>; --bg: #0a0a0c; --border: rgba(255, 255, 255, 0.08); }
         
-        <div class="rooms-list">
-            <?php foreach ($rooms as $room): ?>
-                <div class="room-item" data-room-id="<?= (int)$room['id'] ?>">
-                    <span>#<?= e($room['name']) ?></span>
-                    <?php if ($room['is_admin']): ?>
-                        <span class="room-admin-badge" title="Admin">👑</span>
-                    <?php endif; ?>
-                    <span class="room-member-count"><?= $room['member_count'] ?> membres</span>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    </aside>
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: var(--bg); color: #eee; font-family: sans-serif; }
+        body { display: flex; flex-direction: column; }
+        /* Animation Dégradé de Bleus */
+@keyframes blue-pulse {
+    0% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); } /* Bleu clair */
+    50% { color: #0044ff; text-shadow: 0 0 8px rgba(0, 68, 255, 0.6); }  /* Bleu foncé */
+    100% { color: #00d4ff; text-shadow: 0 0 8px rgba(0, 212, 255, 0.6); }
+}
 
-    <!-- Header chat -->
-    <header class="chat-header">
-        <h2 id="current-room-name">Sélectionner un salon</h2>
-        <div class="header-actions">
-            <button id="theme-toggle" class="btn-small">🌙</button>
-            <a href="/dashboard.php" class="btn-primary btn-small">← Dashboard</a>
-        </div>
-    </header>
+.vip-glow { 
+    animation: blue-pulse 3s ease-in-out infinite; 
+    font-weight: bold;
+}
+        @keyframes admin-rainbow {
+            0% { color: #ff0000; text-shadow: 0 0 5px #ff0000; }
+            50% { color: #00f2ff; text-shadow: 0 0 5px #00f2ff; }
+            100% { color: #ff0000; text-shadow: 0 0 5px #ff0000; }
+        }
+        .admin-glow { animation: admin-rainbow 3s linear infinite; font-weight: 900; }
 
-    <!-- Zone principale chat -->
-    <main class="chat-main">
-        <div id="messages" class="messages-list">
-            <div class="no-room-selected">
-                <h3>Bienvenue dans le chat !</h3>
-                <p>Cliquez sur un salon à gauche pour commencer.</p>
-            </div>
-        </div>
+        .nav { height: 60px; background: #000; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; flex-shrink: 0; }
+        
+        #chatWindow { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column; 
+            background: rgba(255,255,255,0.01);
+        }
 
-        <div class="chat-input-container">
-            <div class="chat-input">
-                <textarea id="message-input" rows="1" placeholder="Tapez votre message (Ctrl+Entrée)..."></textarea>
-                <input type="file" id="file-input" hidden accept="image/*,video/*,audio/*,.pdf">
-                <button id="btn-attach" class="btn-small" title="Pièce jointe">📎</button>
-                <button id="btn-send" class="btn-primary">Envoyer</button>
-            </div>
-        </div>
-    </main>
+        .input-area { height: 80px; background: #000; border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; flex-shrink: 0; }
+        #chatForm { display: flex; width: 100%; gap: 10px; }
+        #msgInput { flex: 1; background: #111; border: 1px solid var(--border); color: #fff; padding: 12px; border-radius: 8px; outline: none; }
+        .btn-send { background: var(--neon); color: #000; border: none; padding: 0 25px; border-radius: 8px; font-weight: bold; cursor: pointer; }
 
-    <!-- Sidebar utilisateurs en ligne (droite) -->
-    <aside class="sidebar-users">
-        <div class="sidebar-header">
-            <h3>En ligne (<?= count($online_users) ?>)</h3>
-        </div>
-        <div id="online-users-list" class="online-users-list">
-            <?php foreach ($online_users as $user): ?>
-                <div class="online-user" data-user-id="<?= (int)$user['id'] ?>">
-                    <a href="/profile.php?id=<?= $user['id'] ?>" class="user-link">
-                        <?= e($user['username']) ?>
-                    </a>
-                </div>
-            <?php endforeach; ?>
-        </div>
-    </aside>
-
-    <!-- Modal création salon -->
-    <?php if (in_array($role, ['admin', 'moderator'])): ?>
-    <div id="create-room-modal" class="modal">
-        <div class="modal-content">
-            <h3>Créer un nouveau salon</h3>
-            <form id="create-room-form">
-                <div class="input-group">
-                    <label>Nom du salon</label>
-                    <input type="text" name="name" required maxlength="50">
-                </div>
-                <div class="input-group">
-                    <label>Privé ?</label>
-                    <input type="checkbox" name="is_private">
-                    <small>Seuls les membres invités peuvent rejoindre</small>
-                </div>
-                <div class="modal-actions">
-                    <button type="submit" class="btn-primary">Créer</button>
-                    <button type="button" class="btn-cancel" id="cancel-create-room">Annuler</button>
-                </div>
-            </form>
-        </div>
+        /* Pour éviter que les images ne fassent sauter le layout au chargement */
+        img { border-radius: 8px; background: #222; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="dashboard.php" style="color:#fff; text-decoration:none; font-size:0.8rem; border:1px solid #333; padding:5px 10px; border-radius:5px;">🏠 DASHBOARD</a>
+        <div style="color:var(--neon); font-weight:bold;">STREAM_GLOBAL</div>
+        <div style="width:80px;"></div>
     </div>
-    <?php endif; ?>
-</div>
 
-<script>
-const USER_ID = <?= json_encode($user_id) ?>;
-const USER_ROLE = <?= json_encode($role) ?>;
-</script>
-<script src="/assets/js/theme.js"></script>
-<script src="/assets/js/chat.js"></script>
+    <div id="chatWindow">
+        </div>
+
+    <div class="input-area">
+        <form id="chatForm">
+            <input type="text" id="msgInput" placeholder="Saisir un signal..." required autocomplete="off">
+            <button type="submit" class="btn-send">SEND</button>
+        </form>
+    </div>
+
+    <script>
+        const win = document.getElementById('chatWindow');
+        let lastHTML = "";
+        let initial = true;
+
+        function load() {
+            fetch('fetch_chat.php').then(r => r.text()).then(html => {
+                if (html === lastHTML) return;
+                const isBottom = win.scrollHeight - win.scrollTop <= win.clientHeight + 150;
+                win.innerHTML = html;
+                lastHTML = html;
+                if (isBottom || initial) { win.scrollTop = win.scrollHeight; initial = false; }
+            });
+        }
+
+        document.getElementById('chatForm').onsubmit = e => {
+            e.preventDefault();
+            const fd = new FormData(); fd.append('message', document.getElementById('msgInput').value);
+            document.getElementById('msgInput').value = "";
+            fetch('post_chat.php', { method: 'POST', body: fd }).then(() => load());
+        };
+
+        setInterval(load, 2000);
+        load();
+    </script>
 </body>
 </html>
