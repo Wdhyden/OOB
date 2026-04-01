@@ -9,28 +9,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'];
     
     if ($username === 'admin') {
-        $error = "Utilisateur non autorisé via cette interface";
+        $error = "ERR_AUTH_FORBIDDEN_INTERFACE";
     } else {
         try {
-            // Recherche de l'utilisateur dans la base de données
             $stmt = $pdo->prepare("SELECT id, username, password_hash, role FROM users WHERE username = ? LIMIT 1");
             $stmt->execute([$username]);
             $user = $stmt->fetch();
             
-            // Vérification du mot de passe avec password_verify
             if ($user && password_verify($password, $user['password_hash'])) {
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['role'] = $user['role'] ?? 'user';
                 
-                // Redirection forcée vers le dashboard
-                echo "<script>window.location.href='dashboard.php';</script>";
+                header("Location: dashboard.php");
                 exit;
             } else {
-                $error = "Identifiants incorrects";
+                $error = "ERR_INVALID_CREDENTIALS";
             }
         } catch (PDOException $e) {
-            $error = "Erreur de connexion à la base de données";
+            $error = "ERR_DATABASE_DISCONNECT";
         }
     }
 }
@@ -39,132 +36,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Connexion - Out-Of-Bounds</title>
+    <title>AUTH_REQUIRED // OOB_OS</title>
     <style>
+        :root { --neon: #ffffff; --bg: #030304; --panel: #080809; --border: #1a1a1c; }
+        
         body {
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
-            color: #f5f5f5;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            margin: 0;
+            background: var(--bg); color: #888; font-family: 'Segoe UI', sans-serif;
+            margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; height: 100vh;
+            overflow: hidden;
         }
-        .login-box {
-            background: rgba(31, 32, 32, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: 24px;
-            padding: 40px;
-            width: 100%;
-            max-width: 420px;
-            box-shadow: 0 25px 70px rgba(0,0,0,0.6);
-            border: 1px solid #333;
+
+        /* Scanline Overlay */
+        body::before {
+            content: " "; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            background-size: 100% 4px, 3px 100%; pointer-events: none; z-index: 100;
         }
-        h1 {
-            color: #ff6fd8;
-            text-align: center;
-            font-size: 2.5em;
-            margin-bottom: 30px;
-            font-weight: 800;
-            text-shadow: 0 0 10px rgba(255, 111, 216, 0.3);
+
+        .login-frame {
+            width: 100%; max-width: 400px; background: var(--panel);
+            border: 1px solid var(--border); position: relative;
+            animation: bootIn 0.5s cubic-bezier(0.23, 1, 0.32, 1);
         }
-        .input-group {
-            margin-bottom: 20px;
+
+        @keyframes bootIn {
+            from { opacity: 0; transform: scale(0.95) translateY(10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
         }
+
+        .login-header {
+            padding: 20px; background: #000; border-bottom: 1px solid var(--border);
+            text-align: center; font-family: monospace; font-size: 0.75rem;
+            letter-spacing: 5px; color: #fff; font-weight: 900;
+        }
+
+        .login-content { padding: 40px; }
+
+        .input-group { margin-bottom: 25px; position: relative; }
+        .input-label {
+            font-family: monospace; font-size: 0.55rem; color: #444;
+            text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; display: block;
+        }
+
         input {
-            width: 100%;
-            padding: 15px 20px;
-            background: rgba(42, 42, 42, 0.8);
-            border: 2px solid #333;
-            border-radius: 12px;
-            color: #f5f5f5;
-            font-size: 16px;
-            transition: all 0.3s;
-            box-sizing: border-box;
+            width: 100%; background: #000; border: 1px solid var(--border);
+            padding: 15px; border-radius: 4px; color: #eee; font-family: monospace;
+            font-size: 0.85rem; box-sizing: border-box; outline: none; transition: 0.3s;
         }
-        input:focus {
-            outline: none;
-            border-color: #ff6fd8;
-            box-shadow: 0 0 15px rgba(255, 111, 216, 0.3);
+        input:focus { border-color: #fff; background: rgba(255,255,255,0.02); }
+
+        .btn-submit {
+            width: 100%; background: #fff; color: #000; border: none;
+            padding: 18px; border-radius: 4px; font-weight: 900; cursor: pointer;
+            text-transform: uppercase; font-size: 0.75rem; letter-spacing: 3px;
+            transition: 0.3s; margin-top: 10px;
         }
-        button.btn-submit {
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #ff6fd8, #ff85e4);
-            color: #000;
-            border: none;
-            border-radius: 12px;
-            font-size: 18px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s;
+        .btn-submit:hover { filter: brightness(0.8); box-shadow: 0 0 20px rgba(255,255,255,0.1); }
+
+        .error-terminal {
+            background: rgba(255, 68, 68, 0.05); border: 1px solid #ff4444;
+            color: #ff4444; padding: 12px; font-family: monospace; font-size: 0.65rem;
+            margin-bottom: 25px; text-align: center;
         }
-        button.btn-submit:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(255, 111, 216, 0.4);
+
+        .footer-links {
+            padding: 20px; border-top: 1px solid var(--border); text-align: center;
+            background: rgba(0,0,0,0.3);
         }
-        .error {
-            background: rgba(255, 68, 68, 0.1);
-            border: 1px solid #ff4444;
-            color: #ff4444;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            text-align: center;
-            font-size: 14px;
+        .footer-links p { font-size: 0.65rem; color: #333; text-transform: uppercase; margin-bottom: 15px; }
+        .btn-secondary {
+            color: #666; text-decoration: none; font-size: 0.65rem; font-weight: bold;
+            text-transform: uppercase; letter-spacing: 1px; transition: 0.2s;
         }
-        .register-footer {
-            text-align: center;
-            margin-top: 30px;
-            border-top: 1px solid #333;
-            padding-top: 20px;
-        }
-        .register-footer p {
-            color: #888;
-            font-size: 14px;
-            margin-bottom: 15px;
-        }
-        .btn-register {
-            display: block;
-            padding: 12px;
-            border: 2px solid #ff6fd8;
-            border-radius: 12px;
-            color: #ff6fd8;
-            text-decoration: none;
-            font-weight: 700;
-            transition: all 0.3s;
-        }
-        .btn-register:hover {
-            background: rgba(255, 111, 216, 0.1);
-            box-shadow: 0 0 15px rgba(255, 111, 216, 0.2);
-        }
+        .btn-secondary:hover { color: #fff; }
+
+        /* Décorations angles */
+        .corner { position: absolute; width: 6px; height: 6px; border: 1px solid #333; }
+        .tl { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+        .tr { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+        .bl { bottom: -1px; left: -1px; border-right: 0; border-top: 0; }
+        .br { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
     </style>
 </head>
 <body>
-    <div class="login-box">
-        <h1>🔐 Connexion</h1>
-        
-        <?php if ($error): ?>
-            <div class="error"><?= htmlspecialchars($error) ?></div>
-        <?php endif; ?>
-        
-        <form method="POST">
-            <div class="input-group">
-                <input type="text" name="username" placeholder="Nom d'utilisateur" 
-                       value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required autofocus>
-            </div>
-            <div class="input-group">
-                <input type="password" name="password" placeholder="Mot de passe" required>
-            </div>
-            <button type="submit" class="btn-submit">Entrer</button>
-        </form>
 
-        <div class="register-footer">
-            <p>Nouveau sur Out-Of-Bounds ?</p>
-            <a href="register.php" class="btn-register">REJOINDRE LA MATRICE</a>
+    <div class="login-frame">
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+
+        <div class="login-header">INITIALIZE_SESSION</div>
+        
+        <div class="login-content">
+            <?php if ($error): ?>
+                <div class="error-terminal">>> <?= htmlspecialchars($error) ?></div>
+            <?php endif; ?>
+            
+            <form method="POST">
+                <div class="input-group">
+                    <span class="input-label">USER_IDENTIFIER</span>
+                    <input type="text" name="username" placeholder="Saisir ID..." 
+                           value="<?= htmlspecialchars($_POST['username'] ?? '') ?>" required autofocus>
+                </div>
+
+                <div class="input-group">
+                    <span class="input-label">ACCESS_KEY</span>
+                    <input type="password" name="password" placeholder="Saisir clé..." required>
+                </div>
+
+                <button type="submit" class="btn-submit">AUTH_PROCEED</button>
+            </form>
+        </div>
+
+        <div class="footer-links">
+            <p>Pas de signal détecté ?</p>
+            <a href="register.php" class="btn-secondary">INITIALISER_NOUVELLE_UNITÉ</a>
         </div>
     </div>
+
 </body>
 </html>

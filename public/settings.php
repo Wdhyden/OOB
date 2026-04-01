@@ -2,164 +2,197 @@
 // public/settings.php
 require_once __DIR__ . '/../app/config/database.php';
 require_once __DIR__ . '/../app/lib/auth.php';
+require_once __DIR__ . '/../app/lib/ranks.php';
 require_once __DIR__ . '/../app/lib/security.php';
 
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php');
-    exit;
-}
+check_auth();
 
 $user_id = $_SESSION['user_id'];
 $success = "";
 $error = "";
 
-// 1. R√©cup√©ration des donn√©es actuelles du profil
+// 1. RÈcupÈration des donnÈes et des grades dÈbloquÈs
 try {
-    $stmt = $pdo->prepare("SELECT * FROM user_profiles WHERE user_id = ?");
+    $stmt = $pdo->prepare("SELECT u.username, p.* FROM users u JOIN user_profiles p ON u.id = p.user_id WHERE u.id = ?");
     $stmt->execute([$user_id]);
-    $profile = $stmt->fetch();
-} catch (Exception $e) {
-    $error = "Erreur de chargement du profil.";
-}
-
-// 2. Traitement du formulaire lors de l'envoi
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $first_name = trim($_POST['first_name'] ?? '');
-    $last_name  = trim($_POST['last_name'] ?? '');
-    $region     = trim($_POST['region'] ?? '');
-    $bio        = trim($_POST['bio'] ?? '');
-    $color      = $_POST['nickname_color'] ?? '#ff6fd8';
+    $user = $stmt->fetch();
     
-    $avatar_path = $profile['avatar_path'] ?? 'assets/img/default-avatar.png';
+    $unlockedRanks = getUnlockedRanks($pdo, $user['level']);
+} catch (Exception $e) { $error = "ERREUR_INITIALISATION"; }
 
-    // --- Gestion de l'Upload d'Avatar ---
-    if (isset($_FILES['avatar']) && $_FILES['avatar']['error'] === UPLOAD_ERR_OK) {
-        // Validation via ta biblioth√®que security.php
-        $validation_error = validate_uploaded_file($_FILES['avatar'], ['image/jpeg', 'image/png', 'image/gif'], 2 * 1024 * 1024);
-        
-        if ($validation_error) {
-            $error = $validation_error;
-        } else {
-            $ext = pathinfo($_FILES['avatar']['name'], PATHINFO_EXTENSION);
-            $new_filename = uniqid('avatar_', true) . '.' . $ext;
-            
-            // Chemin absolu pour le serveur
-            $targetDir = __DIR__ . '/../storage/uploads/avatars/';
-            
-            // Cr√©er le dossier s'il n'existe pas
-            if (!is_dir($targetDir)) {
-                mkdir($targetDir, 0755, true);
-            }
-            
-            if (move_uploaded_file($_FILES['avatar']['tmp_name'], $targetDir . $new_filename)) {
-                $avatar_path = 'uploads/avatars/' . $new_filename;
-            } else {
-                $error = "Le serveur n'a pas pu d√©placer le fichier vers le dossier final. V√©rifiez les permissions (chmod).";
-            }
-        }
-    } elseif ($_FILES['avatar']['error'] !== UPLOAD_ERR_NO_FILE) {
-        // Si une erreur d'upload r√©elle a eu lieu (autre que "pas de fichier")
-        $error = "Erreur d'upload PHP code : " . $_FILES['avatar']['error'];
-    }
+// 2. Traitement global du formulaire
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $new_color = $_POST['nickname_color'] ?? $user['nickname_color'];
+    $selected_rank = $_POST['selected_rank'] ?? $user['rank'];
+    $new_bio = htmlspecialchars($_POST['bio'] ?? '');
+    $new_region = htmlspecialchars($_POST['region'] ?? '');
+    $avatar_path = $user['avatar_path'];
 
-    // --- Mise √† jour de la Base de Donn√©es ---
-    if (empty($error)) {
-        try {
-            $stmt = $pdo->prepare("
-                UPDATE user_profiles 
-                SET first_name = ?, last_name = ?, region = ?, bio = ?, nickname_color = ?, avatar_path = ?
-                WHERE user_id = ?
-            ");
-            $stmt->execute([$first_name, $last_name, $region, $bio, $color, $avatar_path, $user_id]);
-            
-            $success = "Profil synchronis√© avec succ√®s !";
-            // On recharge les donn√©es pour l'affichage imm√©diat
-            $profile['first_name'] = $first_name;
-            $profile['last_name'] = $last_name;
-            $profile['region'] = $region;
-            $profile['bio'] = $bio;
-            $profile['nickname_color'] = $color;
-            $profile['avatar_path'] = $avatar_path;
-        } catch (Exception $e) {
-            $error = "Erreur SQL : " . $e->getMessage();
+    // --- SÈcuritÈ Grade ---
+    $stmtCheck = $pdo->prepare("SELECT name FROM ranks WHERE name = ? AND min_lvl <= ?");
+    $stmtCheck->execute([$selected_rank, $user['level']]);
+    
+    if ($stmtCheck->fetch()) {
+        // --- Gestion Avatar ---
+        if (isset($_FILES['avatar']) && $_FILES['avatar']['error'] === UPLOAD_ERR_OK) {
+            $val_err = validate_uploaded_file($_FILES['avatar'], ['image/jpeg', 'image/png', 'image/webp'], 2 * 1024 * 1024);
+            if (!$val_err) {
+                $ext = pathinfo($_FILES['avatar']['name'], PATHINFO_EXTENSION);
+                $new_name = uniqid('avatar_', true) . '.' . $ext;
+                $target = __DIR__ . '/../storage/uploads/avatars/';
+                if (!is_dir($target)) mkdir($target, 0755, true);
+                if (move_uploaded_file($_FILES['avatar']['tmp_name'], $target . $new_name)) {
+                    $avatar_path = 'storage/uploads/avatars/' . $new_name;
+                }
+            } else { $error = $val_err; }
         }
-    }
+
+        // --- Mise ‡ jour BDD ---
+        if (empty($error)) {
+            $upd = $pdo->prepare("UPDATE user_profiles SET nickname_color = ?, rank = ?, bio = ?, region = ?, avatar_path = ? WHERE user_id = ?");
+            $upd->execute([$new_color, $selected_rank, $new_bio, $new_region, $avatar_path, $user_id]);
+            $success = "UNIT…_MISE_¿_JOUR";
+            header("Refresh:1"); 
+        }
+    } else { $error = "GRADE_NON_AUTORIS…"; }
 }
 ?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - Out-Of-Bounds</title>
+    <title>CONFIG_SYSTEM // OOB_OS</title>
     <style>
-        :root { --neon: <?= htmlspecialchars($profile['nickname_color'] ?? '#ff6fd8') ?>; }
-        body { background: #0a0a0b; color: #fff; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; padding: 40px 20px; margin: 0; }
-        .card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 30px; width: 100%; max-width: 550px; }
-        h1 { color: var(--neon); text-shadow: 0 0 10px var(--neon); text-align: center; margin-bottom: 30px; text-transform: uppercase; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; color: #888; font-size: 0.8rem; font-weight: bold; letter-spacing: 1px; }
-        input, textarea, select { width: 100%; padding: 12px; background: rgba(0,0,0,0.4); border: 1px solid #333; border-radius: 10px; color: #fff; box-sizing: border-box; transition: 0.3s; }
-        input:focus, textarea:focus { border-color: var(--neon); outline: none; box-shadow: 0 0 10px rgba(255,111,216,0.1); }
-        .avatar-section { text-align: center; margin-bottom: 30px; }
-        .avatar-preview { width: 120px; height: 120px; border-radius: 20px; border: 3px solid var(--neon); object-fit: cover; margin-bottom: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
-        .btn-submit { background: var(--neon); color: #000; border: none; padding: 15px; border-radius: 10px; font-weight: 800; cursor: pointer; width: 100%; transition: 0.3s; margin-top: 10px; text-transform: uppercase; }
-        .btn-submit:hover { filter: brightness(1.2); box-shadow: 0 0 20px var(--neon); transform: translateY(-2px); }
-        .alert { padding: 15px; border-radius: 10px; margin-bottom: 20px; font-weight: bold; text-align: center; }
-        .alert-success { background: rgba(0, 255, 100, 0.1); border: 1px solid #00ff64; color: #00ff64; }
-        .alert-error { background: rgba(255, 50, 50, 0.1); border: 1px solid #ff3232; color: #ff3232; }
-        .back { display: block; margin-top: 25px; text-align: center; color: var(--neon); text-decoration: none; font-size: 0.9rem; font-weight: bold; }
+        :root { --neon: <?= $user['nickname_color'] ?>; --bg: #030304; --panel: #080809; --border: #1a1a1c; }
+        
+        body {
+            background: var(--bg); color: #888; font-family: 'Segoe UI', sans-serif;
+            margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh;
+        }
+
+        /* Scanline Overlay */
+        body::before {
+            content: " "; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            background-size: 100% 4px, 3px 100%; pointer-events: none; z-index: 100;
+        }
+
+        /* Top Bar */
+        .top-bar {
+            height: 40px; border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 25px; background: #000; z-index: 50;
+        }
+        .btn-nav { 
+            color: #555; text-decoration: none; font-size: 0.65rem; font-weight: bold; 
+            border: 1px solid var(--border); padding: 5px 12px; border-radius: 4px; transition: 0.2s; 
+        }
+        .btn-nav:hover { background: #fff; color: #000; border-color: #fff; }
+
+        /* Layout */
+        .main-layout {
+            display: grid; grid-template-columns: 1fr; flex: 1; background: var(--border); overflow-y: auto; padding: 40px 0;
+        }
+
+        .config-container {
+            width: 100%; max-width: 650px; margin: 0 auto; animation: fadeIn 0.4s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .section { background: var(--panel); border: 1px solid var(--border); padding: 35px; margin-bottom: 1px; position: relative; }
+        
+        .section-header { 
+            font-size: 0.6rem; color: #333; text-transform: uppercase; 
+            letter-spacing: 2px; margin-bottom: 25px; display: flex; align-items: center; gap: 8px;
+        }
+        .section-header::before { content: ""; width: 4px; height: 4px; background: var(--neon); border-radius: 50%; }
+
+        label { display: block; font-size: 0.55rem; color: #444; text-transform: uppercase; margin-bottom: 8px; font-weight: bold; }
+        
+        input, select, textarea { 
+            width: 100%; background: #000; border: 1px solid var(--border); color: #eee; 
+            padding: 12px; border-radius: 4px; margin-bottom: 20px; box-sizing: border-box; outline: none; 
+            font-family: monospace; transition: 0.2s;
+        }
+        input:focus, select:focus, textarea:focus { border-color: var(--neon); }
+        textarea { height: 100px; resize: none; }
+
+        .avatar-group { display: flex; gap: 25px; align-items: center; margin-bottom: 25px; }
+        .avatar-preview { width: 90px; height: 90px; border-radius: 4px; border: 1px solid var(--neon); object-fit: cover; filter: grayscale(0.5); }
+        
+        .btn-save { 
+            width: 100%; background: var(--neon); color: #000; border: none; padding: 20px; 
+            border-radius: 4px; font-weight: 900; cursor: pointer; text-transform: uppercase; 
+            font-size: 0.8rem; letter-spacing: 2px; margin-top: 20px; transition: 0.3s;
+        }
+        .btn-save:hover { filter: brightness(1.2); box-shadow: 0 0 20px rgba(var(--neon), 0.2); }
+
+        .status-alert { 
+            padding: 15px; border-radius: 4px; font-size: 0.7rem; text-align: center; 
+            margin-bottom: 20px; font-weight: bold; font-family: monospace; border: 1px solid;
+        }
+        .success { background: rgba(0, 255, 100, 0.02); color: #00ff64; border-color: #00ff64; }
+        .error { background: rgba(255, 68, 68, 0.02); color: #ff4444; border-color: #ff4444; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h1>Param√®tres</h1>
-
-    <?php if($success): ?> <div class="alert alert-success"><?= $success ?></div> <?php endif; ?>
-    <?php if($error): ?> <div class="alert alert-error"><?= $error ?></div> <?php endif; ?>
-
-    <form method="POST" enctype="multipart/form-data">
-        <div class="avatar-section">
-            <img src="<?= htmlspecialchars($profile['avatar_path'] ?? 'assets/img/default-avatar.png') ?>" class="avatar-preview" alt="Avatar">
-            <div class="form-group">
-                <label>NOUVEL AVATAR (JPG, PNG, GIF)</label>
-                <input type="file" name="avatar" accept="image/*" style="border: none; background: transparent;">
-            </div>
+    <div class="top-bar">
+        <div style="font-size: 0.7rem; font-weight: 900; letter-spacing: 2px;">
+            <span style="color:var(--neon)">?</span> OOB_OS // CONFIG_TERMINAL
         </div>
+        <a href="profile.php" class="btn-nav">ESC_BACK</a>
+    </div>
 
-        <div class="form-group">
-            <label>COULEUR N√âON DU COMPTE</label>
-            <input type="color" name="nickname_color" value="<?= htmlspecialchars($profile['nickname_color'] ?? '#ff6fd8') ?>" style="height: 50px; cursor: pointer;">
+    <div class="main-layout">
+        <div class="config-container">
+            
+            <?php if($success): ?> <div class="status-alert success">> <?= $success ?></div> <?php endif; ?>
+            <?php if($error): ?> <div class="status-alert error">> <?= $error ?></div> <?php endif; ?>
+
+            <form method="POST" enctype="multipart/form-data">
+                
+                <div class="section">
+                    <div class="section-header">VISUAL_IDENTITY_CORE</div>
+                    <div class="avatar-group">
+                        <img src="/<?= $user['avatar_path'] ?: 'assets/img/default-avatar.png' ?>" class="avatar-preview">
+                        <div style="flex: 1;">
+                            <label>Update_Avatar_File</label>
+                            <input type="file" name="avatar" accept="image/*">
+                        </div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <label>Signal_Color</label>
+                            <input type="color" name="nickname_color" value="<?= $user['nickname_color'] ?>" style="height: 45px; padding: 4px; cursor: pointer;">
+                        </div>
+                        <div>
+                            <label>Clearance_Level</label>
+                            <select name="selected_rank">
+                                <?php foreach($unlockedRanks as $rk): ?>
+                                    <option value="<?= $rk['name'] ?>" <?= ($user['rank'] == $rk['name']) ? 'selected' : '' ?>><?= strtoupper($rk['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-header">DATA_FIELD_TRANSMISSION</div>
+                    <label>Sector_Location</label>
+                    <input type="text" name="region" value="<?= htmlspecialchars($user['region']) ?>" placeholder="LOC_UNKNOWN">
+                    
+                    <label>Biographical_Stream</label>
+                    <textarea name="bio" placeholder="Saisir les donnÈes de l'unitÈ..."><?= htmlspecialchars($user['bio']) ?></textarea>
+                </div>
+
+                <button type="submit" class="btn-save">Execute_Sync_Sequence</button>
+            </form>
         </div>
-
-        <div style="display: flex; gap: 15px;">
-            <div class="form-group" style="flex:1;">
-                <label>PR√âNOM</label>
-                <input type="text" name="first_name" value="<?= htmlspecialchars($profile['first_name'] ?? '') ?>">
-            </div>
-            <div class="form-group" style="flex:1;">
-                <label>NOM</label>
-                <input type="text" name="last_name" value="<?= htmlspecialchars($profile['last_name'] ?? '') ?>">
-            </div>
-        </div>
-
-        <div class="form-group">
-            <label>R√âGION</label>
-            <input type="text" name="region" value="<?= htmlspecialchars($profile['region'] ?? '') ?>">
-        </div>
-
-        <div class="form-group">
-            <label>BIO / TRANSMISSION</label>
-            <textarea name="bio" rows="4"><?= htmlspecialchars($profile['bio'] ?? '') ?></textarea>
-        </div>
-
-        <button type="submit" class="btn-submit">Mettre √† jour les donn√©es</button>
-    </form>
-
-    <a href="profile.php" class="back">‚Üê RETOUR AU PROFIL</a>
-</div>
+    </div>
 
 </body>
 </html>
